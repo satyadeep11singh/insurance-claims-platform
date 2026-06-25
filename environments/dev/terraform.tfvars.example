@@ -6,7 +6,6 @@
 location             = "canadacentral"
 resource_group_name  = "rg-claims-platform-dev"
 admin_username       = "northwindadmin"
-ssh_public_key_path  = "/c/Users/satya/.ssh/id_rsa.pub"
 
 tags = {
   Environment        = "dev"

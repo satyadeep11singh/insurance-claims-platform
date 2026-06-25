@@ -45,8 +45,8 @@ variable "admin_username" {
   default = "northwindadmin"
 }
 
-variable "ssh_public_key_path" {
-  description = "Path to an SSH public key. No default on purpose -- never hardcode or commit key material."
+variable "ssh_public_key" {
+  description = "SSH public key CONTENT (not a file path) -- e.g. tls_private_key.x.public_key_openssh from the caller. Accepting content rather than a path keeps this module portable between local runs and pipeline agents, which have no access to a local filesystem path."
   type        = string
   default     = null
 }

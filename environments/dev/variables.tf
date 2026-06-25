@@ -15,11 +15,6 @@ variable "admin_username" {
   default = "northwindadmin"
 }
 
-variable "ssh_public_key_path" {
-  description = "Path to your SSH public key. No default -- supply in terraform.tfvars (gitignored)."
-  type        = string
-}
-
 variable "tags" {
   type = map(string)
   default = {

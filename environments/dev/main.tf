@@ -24,6 +24,15 @@ resource "random_id" "suffix" {
   byte_length = 3
 }
 
+# Generated, not supplied: nobody is meant to SSH into this VM -- it exists
+# to be governed by policy, not logged into. Generating the key here removes
+# any dependency on a local file path (which doesn't exist in a pipeline
+# agent anyway, and was a source of Windows-path issues locally).
+resource "tls_private_key" "claims_processor" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
 # --- Sensitive zone ---
 # Restrictive NSG: only allows inbound traffic from the general zone's
 # address range, on no ports by default (deny-by-default is the point --
@@ -66,7 +75,7 @@ module "compute_sensitive" {
   create_vm            = true
   vm_name              = "vm-claims-processor"
   admin_username       = var.admin_username
-  ssh_public_key_path  = var.ssh_public_key_path
+  ssh_public_key       = tls_private_key.claims_processor.public_key_openssh
 }
 
 # --- General zone ---
