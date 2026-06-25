@@ -1,0 +1,69 @@
+# pipelines/azure-pipelines-build.yml
+#
+# Build Pipeline -- validates and plans the environments/dev Terraform
+# configuration. Never applies anything; only checks the configuration is
+# valid and produces a plan, then publishes that plan as an artifact for the
+# Release Pipeline to apply later, unchanged, after human approval.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - environments/dev/*
+      - modules/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Workload Identity Federation via managed identity -- no stored secret.
+  azureServiceConnection: 'claims-platform-oidc-connection'
+  terraformWorkingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+stages:
+  - stage: Validate_And_Plan
+    displayName: Validate and plan Terraform
+    jobs:
+      - job: Plan
+        displayName: terraform init, validate, plan
+        steps:
+          - task: TerraformInstaller@1
+            displayName: Install Terraform
+            inputs:
+              terraformVersion: '1.7.5'
+
+          - task: TerraformTaskV4@4
+            displayName: terraform init
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              backendServiceArm: '$(azureServiceConnection)'
+              backendAzureRmResourceGroupName: 'rg-northwind-tfstate'
+              backendAzureRmStorageAccountName: 'stnorthwindtf676746'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: 'claims-platform-dev.tfstate'
+
+          - task: TerraformTaskV4@4
+            displayName: terraform validate
+            inputs:
+              provider: 'azurerm'
+              command: 'validate'
+              workingDirectory: '$(terraformWorkingDirectory)'
+
+          - task: TerraformTaskV4@4
+            displayName: terraform plan
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              environmentServiceNameAzureRM: '$(azureServiceConnection)'
+              commandOptions: '-out=$(terraformWorkingDirectory)/tfplan -input=false'
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish plan artifact
+            inputs:
+              targetPath: '$(terraformWorkingDirectory)/tfplan'
+              artifact: 'terraform-plan'
