@@ -1,0 +1,19 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+crash.log
+crash.*.log
+
+# Azure CLI / credentials - never commit
+*.pem
+*.key
+.env
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
