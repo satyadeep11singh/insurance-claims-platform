@@ -1,31 +1,25 @@
 # pipelines/azure-pipelines-release.yml
 #
 # Release Pipeline -- applies the EXACT plan artifact the Build Pipeline
-# produced. Never regenerates a plan. Manually triggered, never automatic --
-# applying real infrastructure is a deliberate action, not a side effect of
-# a successful Build Pipeline run.
+# produced. Never regenerates a plan. Manually triggered, never automatic.
 #
-# This is a SEPARATE pipeline from the Build Pipeline -- `download: current`
-# only ever reaches a prior stage of the SAME pipeline run, so downloading
-# an artifact published by a genuinely different pipeline requires declaring
-# it as a pipeline `resource` first, then downloading FROM that resource's
-# identifier (here, `buildPipeline`) rather than from `current`.
+# Staging's actual Terraform work runs in a PLAIN job, not a deployment job --
+# the Microsoft DevLabs Terraform extension has a known bug (confirmed via
+# microsoft/azure-pipelines-extensions issue #724) where TerraformTaskV4 fails
+# with "spawn ... ENOENT" specifically inside deployment job runOnce.deploy
+# steps, even though the same binary/task works correctly in a plain job. A
+# separate, lightweight deployment job records the deployment against the
+# 'staging' Environment afterward, without touching Terraform.
 #
-# Two stages, ONE real environment:
-#  - staging:    downloads the plan artifact, runs terraform apply tfplan.
-#                This is where the infrastructure actually becomes real.
-#  - production: a deliberate human checkpoint AFTER staging succeeds --
-#                confirms the deployment, does not re-apply anything. Keeps
-#                "infrastructure exists" and "someone signed off on it"
-#                as two distinct moments, even with one physical environment.
+# Production has no apply at all -- it's a deliberate human checkpoint that
+# confirms staging succeeded, gated by an approval on the 'production'
+# Environment.
 
 trigger: none
 
 resources:
   pipelines:
     - pipeline: buildPipeline
-      # Confirmed exact identifier from the Build Pipeline's own run page --
-      # note the -build suffix, which an initial guess at this name omitted.
       source: 'satyadeep11singh.insurance-claims-platform-build'
       branch: main
 
@@ -40,56 +34,49 @@ stages:
   - stage: Staging
     displayName: Staging - apply infrastructure
     jobs:
-      - deployment: ApplyStaging
+      - job: ApplyStaging
         displayName: terraform apply (staging)
+        steps:
+          - task: TerraformInstaller@1
+            displayName: Install Terraform
+            inputs:
+              terraformVersion: '1.7.5'
+
+          - download: buildPipeline
+            artifact: terraform-plan
+            displayName: Download plan artifact (from Build Pipeline)
+
+          - task: TerraformTaskV4@4
+            displayName: terraform init
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              backendServiceArm: '$(azureServiceConnection)'
+              backendAzureRmResourceGroupName: 'rg-northwind-tfstate'
+              backendAzureRmStorageAccountName: 'stnorthwindtf676746'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: 'claims-platform-dev.tfstate'
+
+          - task: TerraformTaskV4@4
+            displayName: terraform apply (exact plan artifact)
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(terraformWorkingDirectory)'
+              environmentServiceNameAzureRM: '$(azureServiceConnection)'
+              commandOptions: '$(Pipeline.Workspace)/buildPipeline/terraform-plan/tfplan'
+
+      - deployment: RecordStaging
+        displayName: Record staging deployment
+        dependsOn: ApplyStaging
         environment: 'staging'
         strategy:
           runOnce:
             deploy:
               steps:
-                - task: TerraformInstaller@1
-                  displayName: Install Terraform
-                  inputs:
-                    terraformVersion: '1.7.5'
-                 # Temporary diagnostic: confirms whether terraform is
-                # genuinely on PATH/at the expected location in THIS job,
-                # right after the installer claims success. Remove once the
-                # ENOENT issue is resolved.
-                - script: |
-                    echo "PATH is: $PATH"
-                    which terraform || echo "terraform not found on PATH"
-                    ls -la /opt/hostedtoolcache/terraform/1.7.5/x64/ || echo "install dir not found"
-                  displayName: Debug - verify terraform location 
-
-                - download: buildPipeline
-                  artifact: terraform-plan
-                  displayName: Download plan artifact (from Build Pipeline)
-
-                - task: TerraformTaskV4@4
-                  displayName: terraform init
-                  inputs:
-                    provider: 'azurerm'
-                    command: 'init'
-                    workingDirectory: '$(terraformWorkingDirectory)'
-                    backendServiceArm: '$(azureServiceConnection)'
-                    backendAzureRmResourceGroupName: 'rg-northwind-tfstate'
-                    backendAzureRmStorageAccountName: 'stnorthwindtf676746'
-                    backendAzureRmContainerName: 'tfstate'
-                    backendAzureRmKey: 'claims-platform-dev.tfstate'
-
-                # Apply the EXACT downloaded plan file -- never a freshly
-                # generated one. This is what guarantees what was reviewed
-                # in the Build Pipeline is what gets applied here. Note the
-                # download path now includes the pipeline resource
-                # identifier (buildPipeline), not just the artifact name.
-                - task: TerraformTaskV4@4
-                  displayName: terraform apply (exact plan artifact)
-                  inputs:
-                    provider: 'azurerm'
-                    command: 'apply'
-                    workingDirectory: '$(terraformWorkingDirectory)'
-                    environmentServiceNameAzureRM: '$(azureServiceConnection)'
-                    commandOptions: '$(Pipeline.Workspace)/buildPipeline/terraform-plan/tfplan'
+                - script: echo "Staging apply completed by job ApplyStaging."
+                  displayName: Record staging deployment
 
   - stage: Production
     displayName: Production - confirm deployment
