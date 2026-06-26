@@ -5,6 +5,12 @@
 # applying real infrastructure is a deliberate action, not a side effect of
 # a successful Build Pipeline run.
 #
+# This is a SEPARATE pipeline from the Build Pipeline -- `download: current`
+# only ever reaches a prior stage of the SAME pipeline run, so downloading
+# an artifact published by a genuinely different pipeline requires declaring
+# it as a pipeline `resource` first, then downloading FROM that resource's
+# identifier (here, `buildPipeline`) rather than from `current`.
+#
 # Two stages, ONE real environment:
 #  - staging:    downloads the plan artifact, runs terraform apply tfplan.
 #                This is where the infrastructure actually becomes real.
@@ -14,6 +20,14 @@
 #                as two distinct moments, even with one physical environment.
 
 trigger: none
+
+resources:
+  pipelines:
+    - pipeline: buildPipeline
+      # Confirmed exact identifier from the Build Pipeline's own run page --
+      # note the -build suffix, which an initial guess at this name omitted.
+      source: 'satyadeep11singh.insurance-claims-platform-build'
+      branch: main
 
 pool:
   vmImage: 'ubuntu-latest'
@@ -38,9 +52,9 @@ stages:
                   inputs:
                     terraformVersion: '1.7.5'
 
-                - download: current
+                - download: buildPipeline
                   artifact: terraform-plan
-                  displayName: Download plan artifact
+                  displayName: Download plan artifact (from Build Pipeline)
 
                 - task: TerraformTaskV4@4
                   displayName: terraform init
@@ -56,7 +70,9 @@ stages:
 
                 # Apply the EXACT downloaded plan file -- never a freshly
                 # generated one. This is what guarantees what was reviewed
-                # in the Build Pipeline is what gets applied here.
+                # in the Build Pipeline is what gets applied here. Note the
+                # download path now includes the pipeline resource
+                # identifier (buildPipeline), not just the artifact name.
                 - task: TerraformTaskV4@4
                   displayName: terraform apply (exact plan artifact)
                   inputs:
@@ -64,7 +80,7 @@ stages:
                     command: 'apply'
                     workingDirectory: '$(terraformWorkingDirectory)'
                     environmentServiceNameAzureRM: '$(azureServiceConnection)'
-                    commandOptions: '$(Pipeline.Workspace)/terraform-plan/tfplan'
+                    commandOptions: '$(Pipeline.Workspace)/buildPipeline/terraform-plan/tfplan'
 
   - stage: Production
     displayName: Production - confirm deployment
@@ -78,11 +94,6 @@ stages:
           runOnce:
             deploy:
               steps:
-                # No apply here on purpose. This stage exists to require a
-                # human approval (configured on the 'production' Azure DevOps
-                # Environment) before the deployment is considered
-                # production-confirmed -- a deliberate checkpoint, separate
-                # from the infrastructure actually being created in Staging.
                 - script: |
                     echo "Staging apply succeeded and has been reviewed."
                     echo "Confirming claims platform deployment as production-approved."
