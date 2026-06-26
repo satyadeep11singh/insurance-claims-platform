@@ -51,6 +51,15 @@ stages:
                   displayName: Install Terraform
                   inputs:
                     terraformVersion: '1.7.5'
+                 # Temporary diagnostic: confirms whether terraform is
+                # genuinely on PATH/at the expected location in THIS job,
+                # right after the installer claims success. Remove once the
+                # ENOENT issue is resolved.
+                - script: |
+                    echo "PATH is: $PATH"
+                    which terraform || echo "terraform not found on PATH"
+                    ls -la /opt/hostedtoolcache/terraform/1.7.5/x64/ || echo "install dir not found"
+                  displayName: Debug - verify terraform location 
 
                 - download: buildPipeline
                   artifact: terraform-plan
