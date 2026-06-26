@@ -1,0 +1,89 @@
+# pipelines/azure-pipelines-release.yml
+#
+# Release Pipeline -- applies the EXACT plan artifact the Build Pipeline
+# produced. Never regenerates a plan. Manually triggered, never automatic --
+# applying real infrastructure is a deliberate action, not a side effect of
+# a successful Build Pipeline run.
+#
+# Two stages, ONE real environment:
+#  - staging:    downloads the plan artifact, runs terraform apply tfplan.
+#                This is where the infrastructure actually becomes real.
+#  - production: a deliberate human checkpoint AFTER staging succeeds --
+#                confirms the deployment, does not re-apply anything. Keeps
+#                "infrastructure exists" and "someone signed off on it"
+#                as two distinct moments, even with one physical environment.
+
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  azureServiceConnection: 'claims-platform-oidc-connection'
+  terraformWorkingDirectory: '$(System.DefaultWorkingDirectory)/environments/dev'
+
+stages:
+  - stage: Staging
+    displayName: Staging - apply infrastructure
+    jobs:
+      - deployment: ApplyStaging
+        displayName: terraform apply (staging)
+        environment: 'staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@1
+                  displayName: Install Terraform
+                  inputs:
+                    terraformVersion: '1.7.5'
+
+                - download: current
+                  artifact: terraform-plan
+                  displayName: Download plan artifact
+
+                - task: TerraformTaskV4@4
+                  displayName: terraform init
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'init'
+                    workingDirectory: '$(terraformWorkingDirectory)'
+                    backendServiceArm: '$(azureServiceConnection)'
+                    backendAzureRmResourceGroupName: 'rg-northwind-tfstate'
+                    backendAzureRmStorageAccountName: 'stnorthwindtf676746'
+                    backendAzureRmContainerName: 'tfstate'
+                    backendAzureRmKey: 'claims-platform-dev.tfstate'
+
+                # Apply the EXACT downloaded plan file -- never a freshly
+                # generated one. This is what guarantees what was reviewed
+                # in the Build Pipeline is what gets applied here.
+                - task: TerraformTaskV4@4
+                  displayName: terraform apply (exact plan artifact)
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'apply'
+                    workingDirectory: '$(terraformWorkingDirectory)'
+                    environmentServiceNameAzureRM: '$(azureServiceConnection)'
+                    commandOptions: '$(Pipeline.Workspace)/terraform-plan/tfplan'
+
+  - stage: Production
+    displayName: Production - confirm deployment
+    dependsOn: Staging
+    condition: succeeded()
+    jobs:
+      - deployment: ConfirmProduction
+        displayName: Confirm staging deployment for production
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # No apply here on purpose. This stage exists to require a
+                # human approval (configured on the 'production' Azure DevOps
+                # Environment) before the deployment is considered
+                # production-confirmed -- a deliberate checkpoint, separate
+                # from the infrastructure actually being created in Staging.
+                - script: |
+                    echo "Staging apply succeeded and has been reviewed."
+                    echo "Confirming claims platform deployment as production-approved."
+                  displayName: Record production confirmation
